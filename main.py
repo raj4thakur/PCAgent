@@ -7,44 +7,44 @@ import sys
 import hashlib
 
 # Password protection
-def check_password():
-    """Returns `True` if the user had the correct password."""
+# def check_password():
+#     """Returns `True` if the user had the correct password."""
 
-    def password_entered():
-        """Checks whether a password entered by the user is correct."""
-        if st.session_state["password"] == "Admin25k":
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Don't store the password
-        else:
-            st.session_state["password_correct"] = False
+#     def password_entered():
+#         """Checks whether a password entered by the user is correct."""
+#         if st.session_state["password"] == "Admin25k":
+#             st.session_state["password_correct"] = True
+#             del st.session_state["password"]  # Don't store the password
+#         else:
+#             st.session_state["password_correct"] = False
 
-    # First run, show input for password
-    if "password_correct" not in st.session_state:
-        st.text_input(
-            "Enter Access Key",
-            type="password",
-            on_change=password_entered,
-            key="password",
-        )
-        return False
+#     # First run, show input for password
+#     if "password_correct" not in st.session_state:
+#         st.text_input(
+#             "Enter Access Key",
+#             type="password",
+#             on_change=password_entered,
+#             key="password",
+#         )
+#         return False
     
-    # Password not correct, show input + error
-    elif not st.session_state["password_correct"]:
-        st.text_input(
-            "Enter Access Key", 
-            type="password",
-            on_change=password_entered,
-            key="password",
-        )
-        st.error("😕 Invalid access key")
-        return False
+#     # Password not correct, show input + error
+#     elif not st.session_state["password_correct"]:
+#         st.text_input(
+#             "Enter Access Key", 
+#             type="password",
+#             on_change=password_entered,
+#             key="password",
+#         )
+#         st.error("😕 Invalid access key")
+#         return False
     
-    # Password correct
-    else:
-        return True
+#     # Password correct
+#     else:
+#         return True
 
-if not check_password():
-    st.stop()
+# if not check_password():
+#     st.stop()
 
 
 
