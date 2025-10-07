@@ -1,4 +1,14 @@
 import streamlit as st
+
+# MUST BE FIRST - Page configuration
+st.set_page_config(
+    page_title="Sales Management System",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Now import other libraries
 import pandas as pd
 import os
 import glob
@@ -6,50 +16,12 @@ from datetime import datetime, timedelta
 import sys
 import hashlib
 
-# Password protection
+# Password protection (commented out as per your code)
 # def check_password():
-#     """Returns `True` if the user had the correct password."""
-
-#     def password_entered():
-#         """Checks whether a password entered by the user is correct."""
-#         if st.session_state["password"] == "Admin25k":
-#             st.session_state["password_correct"] = True
-#             del st.session_state["password"]  # Don't store the password
-#         else:
-#             st.session_state["password_correct"] = False
-
-#     # First run, show input for password
-#     if "password_correct" not in st.session_state:
-#         st.text_input(
-#             "Enter Access Key",
-#             type="password",
-#             on_change=password_entered,
-#             key="password",
-#         )
-#         return False
-    
-#     # Password not correct, show input + error
-#     elif not st.session_state["password_correct"]:
-#         st.text_input(
-#             "Enter Access Key", 
-#             type="password",
-#             on_change=password_entered,
-#             key="password",
-#         )
-#         st.error("😕 Invalid access key")
-#         return False
-    
-#     # Password correct
-#     else:
-#         return True
+#     ... your password code ...
 
 # if not check_password():
 #     st.stop()
-
-
-
-
-
 
 # Try to import plotly with fallback
 try:
@@ -70,14 +42,6 @@ except ImportError as e:
     st.error(f"Import Error: {e}")
     st.info("Please make sure all required files are in the same directory.")
     MODULES_AVAILABLE = False
-
-# Page configuration with custom theme
-st.set_page_config(
-    page_title="Sales Management System",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # Custom CSS for styling
 st.markdown("""
@@ -124,6 +88,172 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Password protection
+# def check_password():
+#     """Returns `True` if the user had the correct password."""
+
+#     def password_entered():
+#         """Checks whether a password entered by the user is correct."""
+#         if st.session_state["password"] == "Admin25k":
+#             st.session_state["password_correct"] = True
+#             del st.session_state["password"]  # Don't store the password
+#         else:
+#             st.session_state["password_correct"] = False
+
+#     # First run, show input for password
+#     if "password_correct" not in st.session_state:
+#         st.text_input(
+#             "Enter Access Key",
+#             type="password",
+#             on_change=password_entered,
+#             key="password",
+#         )
+#         return False
+    
+#     # Password not correct, show input + error
+#     elif not st.session_state["password_correct"]:
+#         st.text_input(
+#             "Enter Access Key", 
+#             type="password",
+#             on_change=password_entered,
+#             key="password",
+#         )
+#         st.error("😕 Invalid access key")
+#         return False
+    
+#     # Password correct
+#     else:
+#         return True
+
+# if not check_password():
+#     st.stop()
+
+def debug_excel_processing():
+    """Debug why only customers are being imported"""
+    st.title("🔍 Excel Processing Debug")
+    
+    uploaded_file = st.file_uploader("Upload Excel file to debug", type=['xlsx', 'xls'])
+    
+    if uploaded_file:
+        # Save file temporarily
+        temp_path = f"debug_{uploaded_file.name}"
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        try:
+            excel_file = pd.ExcelFile(temp_path)
+            
+            st.subheader("📊 File Analysis")
+            st.write(f"**Sheets found:** {excel_file.sheet_names}")
+            
+            for sheet_name in excel_file.sheet_names:
+                st.markdown("---")
+                st.subheader(f"📑 Sheet: `{sheet_name}`")
+                
+                df = pd.read_excel(temp_path, sheet_name=sheet_name)
+                
+                # Show basic info
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Rows", len(df))
+                with col2:
+                    st.metric("Columns", len(df.columns))
+                with col3:
+                    st.metric("Non-empty rows", len(df.dropna(how='all')))
+                
+                # Show columns
+                st.write("**Columns:**")
+                for i, col in enumerate(df.columns):
+                    st.write(f"{i}. `{col}`")
+                
+                # Auto-detect sheet type
+                sheet_type = detect_sheet_type(df)
+                st.write(f"**Detected type:** {sheet_type}")
+                
+                # Show sample data
+                st.write("**First 3 rows:**")
+                st.dataframe(df.head(3))
+                
+                # Test processing
+                if st.button(f"Test Process {sheet_name}", key=f"test_{sheet_name}"):
+                    result = data_processor.process_single_sheet(df, sheet_name, uploaded_file.name)
+                    if result:
+                        st.success(f"✅ Successfully processed as {sheet_type}")
+                    else:
+                        st.error(f"❌ Failed to process as {sheet_type}")
+            
+        except Exception as e:
+            st.error(f"Error: {e}")
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+def detect_sheet_type(df):
+    """Detect what type of data is in the sheet"""
+    columns_lower = [str(col).lower() for col in df.columns]
+    
+    # Check for customer indicators
+    customer_indicators = ['customer', 'name', 'mobile', 'village', 'taluka']
+    customer_score = sum(1 for indicator in customer_indicators 
+                        if any(indicator in col for col in columns_lower))
+    
+    # Check for sales indicators  
+    sales_indicators = ['invoice', 'sale', 'amount', 'product', 'quantity', 'rate']
+    sales_score = sum(1 for indicator in sales_indicators 
+                     if any(indicator in col for col in columns_lower))
+    
+    # Check for distributor indicators
+    distributor_indicators = ['distributor', 'mantri', 'sabhasad', 'contact_in_group']
+    distributor_score = sum(1 for indicator in distributor_indicators 
+                           if any(indicator in col for col in columns_lower))
+    
+    # Check for demo indicators
+    demo_indicators = ['demo', 'followup', 'conversion', 'provided']
+    demo_score = sum(1 for indicator in demo_indicators 
+                    if any(indicator in col for col in columns_lower))
+    
+    scores = {
+        'Customer': customer_score,
+        'Sales': sales_score, 
+        'Distributor': distributor_score,
+        'Demo': demo_score
+    }
+    
+    best_match = max(scores.items(), key=lambda x: x[1])
+    return f"{best_match[0]} (score: {best_match[1]})"
+
+# Add this to your navigation
+if st.sidebar.button("🔍 Debug Excel Processing"):
+    debug_excel_processing()             
+
+
+    
+
+
+
+
+# Try to import plotly with fallback
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    st.warning("Plotly not available. Charts will be displayed as tables.")
+
+# Try to import custom modules with fallback
+try:
+    from database import DatabaseManager
+    from data_processor import DataProcessor
+    from analytics import Analytics
+    MODULES_AVAILABLE = True
+except ImportError as e:
+    st.error(f"Import Error: {e}")
+    st.info("Please make sure all required files are in the same directory.")
+    MODULES_AVAILABLE = False
+
+
 
 # Initialize all components with error handling
 @st.cache_resource

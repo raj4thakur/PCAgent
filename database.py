@@ -4,7 +4,7 @@ import os
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-
+import random  # Add this import
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -333,9 +333,16 @@ class DatabaseManager:
                 cursor.execute(query, params)
             else:
                 cursor.execute(query)
+            
+            # Only try to fetch results for SELECT queries
+            if query.strip().upper().startswith('SELECT'):
+                result = cursor.fetchall()
+            else:
+                result = []
+                
             conn.commit()
-            result = cursor.fetchall()
             return result
+            
         except sqlite3.Error as e:
             logger.error(f"Database query error: {e}")
             conn.rollback()
@@ -345,22 +352,26 @@ class DatabaseManager:
     
     def execute_query(self, query: str, params: tuple = None, log_action: bool = True) -> List[tuple]:
         """Execute a SQL query with comprehensive error handling"""
-        result = self._execute_query_internal(query, params)
-        
-        # Log the query execution (but avoid recursion)
-        if log_action and not self._is_logging:
-            try:
-                self._is_logging = True
-                self._execute_query_internal('''
-                INSERT INTO system_logs (log_type, log_message, table_name, record_id, action)
-                VALUES (?, ?, ?, ?, ?)
-                ''', ('QUERY_EXECUTION', f"Executed query: {query[:100]}...", None, None, 'EXECUTE'))
-            except Exception as e:
-                logger.error(f"Error logging system action: {e}")
-            finally:
-                self._is_logging = False
-        
-        return result
+        try:
+            result = self._execute_query_internal(query, params)
+            
+            # Log the query execution (but avoid recursion)
+            if log_action and not self._is_logging:
+                try:
+                    self._is_logging = True
+                    self._execute_query_internal('''
+                    INSERT INTO system_logs (log_type, log_message, table_name, record_id, action)
+                    VALUES (?, ?, ?, ?, ?)
+                    ''', ('QUERY_EXECUTION', f"Executed query: {query[:100]}...", None, None, 'EXECUTE'))
+                except Exception as e:
+                    logger.error(f"Error logging system action: {e}")
+                finally:
+                    self._is_logging = False
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error in execute_query: {e}")
+            return []  # Return empty list instead of raising exception
     
     def get_dataframe(self, table_name: str = None, query: str = None, params: tuple = None) -> pd.DataFrame:
         """Get table data as DataFrame with flexible query support"""
@@ -372,45 +383,121 @@ class DatabaseManager:
                 df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
             return df
         except Exception as e:
-            logger.error(f"Error getting DataFrame: {e}")
+            logger.error(f"Error getting DataFrame for {table_name if table_name else 'query'}: {e}")
+            # Return empty DataFrame with proper structure
             return pd.DataFrame()
         finally:
             conn.close()
     
     def add_customer(self, name: str, mobile: str = "", village: str = "", taluka: str = "", 
-                    district: str = "", customer_code: str = None) -> int:
-        """Add a new customer and return customer_id"""
+                district: str = "", customer_code: str = None) -> int:
+        """Add a new customer with duplicate handling"""
+        
+        # Generate customer code if not provided
         if not customer_code:
-            customer_code = f"CUST{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            customer_code = f"CUST{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100, 999)}"
         
         try:
-            result = self.execute_query('''
-            INSERT INTO customers (customer_code, name, mobile, village, taluka, district)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ''', (customer_code, name, mobile, village, taluka, district), log_action=False)
+            # Check if customer already exists (by mobile or similar name+village)
+            existing_customer = self.execute_query(
+                'SELECT customer_id FROM customers WHERE mobile = ? OR (name = ? AND village = ?)',
+                (mobile, name, village),
+                log_action=False
+            )
+            
+            if existing_customer:
+                # Customer already exists, return existing ID
+                return existing_customer[0][0]
+            
+            # If customer_code already exists, generate a new one
+            max_attempts = 5
+            for attempt in range(max_attempts):
+                try:
+                    result = self.execute_query('''
+                    INSERT INTO customers (customer_code, name, mobile, village, taluka, district)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (customer_code, name, mobile, village, taluka, district), log_action=False)
+                    break
+                except sqlite3.IntegrityError as e:
+                    if "UNIQUE constraint failed: customers.customer_code" in str(e) and attempt < max_attempts - 1:
+                        # Generate new unique customer code
+                        customer_code = f"CUST{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(1000, 9999)}"
+                        continue
+                    else:
+                        raise e
             
             # Get the inserted customer_id
             customer_id = self.execute_query('SELECT last_insert_rowid()', log_action=False)[0][0]
             
-            # Log the action separately to avoid recursion
-            if not self._is_logging:
-                try:
-                    self._is_logging = True
-                    self._execute_query_internal('''
-                    INSERT INTO system_logs (log_type, log_message, table_name, record_id, action)
-                    VALUES (?, ?, ?, ?, ?)
-                    ''', ('CUSTOMER_ADD', f"Added customer: {name}", 'customers', customer_id, 'INSERT'))
-                except Exception as e:
-                    logger.error(f"Error logging customer action: {e}")
-                finally:
-                    self._is_logging = False
+            self.log_system_action('CUSTOMER_ADD', f"Added customer: {name}", 'customers', customer_id, 'INSERT')
             
             return customer_id
         except Exception as e:
             logger.error(f"Error adding customer: {e}")
-            raise
-    
+            # Return a fallback - this won't be in database but prevents crashes
+            return -1
+    def add_distributor(self, name: str, village: str = "", taluka: str = "", district: str = "", 
+                   mantri_name: str = "", mantri_mobile: str = "", sabhasad_count: int = 0, 
+                   contact_in_group: int = 0) -> int:
+        """Add a new distributor with duplicate handling"""
+        
+        try:
+            # Check if distributor already exists
+            existing_distributor = self.execute_query(
+                'SELECT distributor_id FROM distributors WHERE name = ? AND village = ? AND taluka = ?',
+                (name, village, taluka),
+                log_action=False
+            )
+            
+            if existing_distributor:
+                # Distributor already exists, return existing ID
+                return existing_distributor[0][0]
+            
+            # Insert new distributor
+            self.execute_query('''
+            INSERT INTO distributors (name, village, taluka, district, mantri_name, mantri_mobile, 
+                                    sabhasad_count, contact_in_group)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (name, village, taluka, district, mantri_name, mantri_mobile, 
+                sabhasad_count, contact_in_group), log_action=False)
+            
+            # Get the inserted distributor_id
+            distributor_id = self.execute_query('SELECT last_insert_rowid()', log_action=False)[0][0]
+            
+            self.log_system_action('DISTRIBUTOR_ADD', f"Added distributor: {name}", 'distributors', distributor_id, 'INSERT')
+            
+            return distributor_id
+            
+        except Exception as e:
+            logger.error(f"Error adding distributor: {e}")
+            return -1
+    def get_distributor_by_location(self, village: str, taluka: str) -> Optional[Dict]:
+        """Get distributor by village and taluka"""
+        try:
+            result = self.execute_query(
+                'SELECT * FROM distributors WHERE village = ? AND taluka = ?',
+                (village, taluka),
+                log_action=False
+            )
+            if result:
+                return dict(result[0])
+            return None
+        except Exception as e:
+            logger.error(f"Error getting distributor by location: {e}")
+            return None
 
+    def distributor_exists(self, name: str, village: str, taluka: str) -> bool:
+        """Check if distributor already exists"""
+        try:
+            result = self.execute_query(
+                'SELECT distributor_id FROM distributors WHERE name = ? AND village = ? AND taluka = ?',
+                (name, village, taluka),
+                log_action=False
+            )
+            return len(result) > 0
+        except Exception as e:
+            logger.error(f"Error checking distributor existence: {e}")
+            return False
     def generate_invoice_number(self):
         """Generate automatic invoice number"""
         try:
@@ -440,16 +527,20 @@ class DatabaseManager:
             logger.error(f"Error generating invoice number: {e}")
             return f"INV{int(datetime.now().timestamp())}"  # Fallback
         
+    # Add to your DatabaseManager class in database.py
+
     def add_sale(self, invoice_no: str, customer_id: int, sale_date, items: List[Dict], 
-                 payments: List[Dict] = None, notes: str = "") -> int:
-        """Add a new sale with items and optional payments"""
+             payments: List[Dict] = None, notes: str = "") -> int:
+        """Add a new sale with items and optional payments - ENHANCED"""
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
             
             # Calculate total amount and liters
             total_amount = sum(item['quantity'] * item['rate'] for item in items)
-            total_liters = sum(item.get('liters', 0) for item in items)  # Optional liters field
+            total_liters = sum(item.get('liters', 0) for item in items)
+            
+            print(f"🔧 DEBUG: Creating sale - Invoice: {invoice_no}, Customer: {customer_id}, Total: {total_amount}")  # DEBUG
             
             # Add sale record
             cursor.execute('''
@@ -459,10 +550,13 @@ class DatabaseManager:
             
             # Get the sale ID
             sale_id = cursor.lastrowid
+            print(f"🔧 DEBUG: Sale created with ID: {sale_id}")  # DEBUG
             
             # Add sale items
             for item in items:
                 amount = item['quantity'] * item['rate']
+                print(f"🔧 DEBUG: Adding item - Product: {item['product_id']}, Qty: {item['quantity']}, Rate: {item['rate']}")  # DEBUG
+                
                 cursor.execute('''
                 INSERT INTO sale_items (sale_id, product_id, quantity, rate, amount)
                 VALUES (?, ?, ?, ?, ?)
@@ -475,31 +569,20 @@ class DatabaseManager:
                     INSERT INTO payments (sale_id, payment_date, payment_method, amount, rrn, reference)
                     VALUES (?, ?, ?, ?, ?, ?)
                     ''', (sale_id, payment['payment_date'], payment['method'], 
-                          payment['amount'], payment.get('rrn', ''), payment.get('reference', '')))
+                        payment['amount'], payment.get('rrn', ''), payment.get('reference', '')))
             
             conn.commit()
             
             # Update payment status
             self._update_payment_status(sale_id)
             
-            # Log the action separately to avoid recursion
-            if not self._is_logging:
-                try:
-                    self._is_logging = True
-                    self._execute_query_internal('''
-                    INSERT INTO system_logs (log_type, log_message, table_name, record_id, action)
-                    VALUES (?, ?, ?, ?, ?)
-                    ''', ('SALE_ADD', f"Added sale: {invoice_no}", 'sales', sale_id, 'INSERT'))
-                except Exception as e:
-                    logger.error(f"Error logging sale action: {e}")
-                finally:
-                    self._is_logging = False
-            
+            print(f"🔧 DEBUG: Sale {sale_id} completed successfully")  # DEBUG
             return sale_id
             
         except Exception as e:
             conn.rollback()
             logger.error(f"Error adding sale: {e}")
+            print(f"❌ ERROR in add_sale: {e}")  # DEBUG
             raise
         finally:
             conn.close()
