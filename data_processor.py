@@ -186,27 +186,50 @@ class DataProcessor:
         try:
             processed_rows = 0
             
+            # Clean the dataframe - convert column names to consistent format
+            df.columns = [str(col).strip().upper() for col in df.columns]
+            print(f"DEBUG: Processing distributor sheet with columns: {df.columns.tolist()}")
+            
             for index, row in df.iterrows():
                 try:
                     # Skip header rows and empty rows
                     if self._is_header_row(row) or pd.isna(row.iloc[0]):
+                        print(f"DEBUG: Skipping row {index} - header or empty")
                         continue
                     
-                    # Extract distributor data
-                    name = str(row.iloc[0]) if len(row) > 0 else "Unknown Distributor"
-                    village = str(row.iloc[1]) if len(row) > 1 else ""
-                    taluka = str(row.iloc[2]) if len(row) > 2 else ""
-                    district = str(row.iloc[3]) if len(row) > 3 else ""
-                    mantri_name = str(row.iloc[4]) if len(row) > 4 else ""
-                    mantri_mobile = str(row.iloc[5]) if len(row) > 5 else ""
+                    print(f"DEBUG: Processing row {index}")
                     
-                    # Add distributor to database
+                    # Extract distributor data based on YOUR ACTUAL COLUMNS
+                    # Map your Excel columns to database fields
+                    name = self._extract_distributor_name(row)  # We'll use Village + Taluka as name
+                    village = self._safe_get(row, 'VILLAGE', 1)
+                    taluka = self._safe_get(row, 'TALUKA', 2) 
+                    district = self._safe_get(row, 'DISTRICT', 3)
+                    mantri_name = self._safe_get(row, 'MANTRI_NAME', 4)
+                    mantri_mobile = self._safe_get(row, 'MANTRI_MOBILE', 5)
+                    sabhasad_count = self._safe_get_int(row, 'SABHASAD', 6)
+                    contact_in_group = self._safe_get_int(row, 'CONTACT_IN_GROUP', 7)
+                    
+                    print(f"DEBUG: Extracted - Village: {village}, Taluka: {taluka}, Mantri: {mantri_name}")
+                    
+                    # Validate we have essential data
+                    if not village or not taluka:
+                        print(f"DEBUG: Skipping - missing village or taluka")
+                        continue
+                    
+                    # Create distributor name from village + taluka
+                    if not name:
+                        name = f"{village} - {taluka}"
+                    
+                    # Add distributor to database with ALL fields
                     self.db.execute_query('''
-                    INSERT OR IGNORE INTO distributors (name, village, taluka, district, mantri_name, mantri_mobile)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (name, village, taluka, district, mantri_name, mantri_mobile))
+                    INSERT OR REPLACE INTO distributors 
+                    (name, village, taluka, district, mantri_name, mantri_mobile, sabhasad_count, contact_in_group)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (name, village, taluka, district, mantri_name, mantri_mobile, sabhasad_count, contact_in_group))
                     
                     processed_rows += 1
+                    print(f"DEBUG: Successfully added distributor: {name}")
                     
                 except Exception as e:
                     logger.warning(f"Error processing row {index} in distributor sheet: {e}")
@@ -218,13 +241,69 @@ class DataProcessor:
         except Exception as e:
             logger.error(f"Error processing distributor sheet: {e}")
             return False
+
+    def _extract_distributor_name(self, row):
+        """Extract distributor name from village and taluka"""
+        village = self._safe_get(row, 'VILLAGE', 1)
+        taluka = self._safe_get(row, 'TALUKA', 2)
+        
+        if village and taluka:
+            return f"{village} - {taluka}"
+        elif village:
+            return village
+        elif taluka:
+            return taluka
+        else:
+            return "Unknown Distributor"
+
+    def _safe_get(self, row, column_name, default_index):
+        """Safely get value from row by column name or index"""
+        try:
+            # Try by column name first
+            if column_name in row.index:
+                value = row[column_name]
+                if pd.isna(value):
+                    return ""
+                return str(value).strip()
+            
+            # Fallback to index
+            if len(row) > default_index:
+                value = row.iloc[default_index]
+                if pd.isna(value):
+                    return ""
+                return str(value).strip()
+            
+            return ""
+        except Exception:
+            return ""
+
+    def _safe_get_int(self, row, column_name, default_index):
+        """Safely get integer value from row"""
+        try:
+            str_value = self._safe_get(row, column_name, default_index)
+            if str_value and str_value.strip():
+                return int(float(str_value))  # Handle both int and float strings
+            return 0
+        except (ValueError, TypeError):
+            return 0
     
     def _is_header_row(self, row):
-        """Check if row is a header row"""
-        first_value = str(row.iloc[0]) if len(row) > 0 and pd.notna(row.iloc[0]) else ""
-        header_indicators = ['SR', 'NO', 'NAME', 'CUSTOMER', 'INVOICE', 'PRODUCT', 'DISTRIBUTOR']
-        return any(indicator in first_value.upper() for indicator in header_indicators)
-    
+        """Check if row is a header row - updated for your data"""
+        if len(row) == 0:
+            return True
+            
+        first_value = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ""
+        first_value_upper = first_value.upper()
+        
+        # Header indicators for YOUR data
+        header_indicators = [
+            'DATE', 'VILLAGE', 'TALUKA', 'DISTRICT', 'MANTRI', 
+            'SABHASAD', 'CONTACT', 'TOTAL', 'SR', 'NO', 'NAME'
+        ]
+        
+        # If first value contains any header indicator, it's likely a header
+        return any(indicator in first_value_upper for indicator in header_indicators)
+        
     def _safe_float(self, value):
         """Safely convert value to float"""
         try:

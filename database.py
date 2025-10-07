@@ -410,6 +410,36 @@ class DatabaseManager:
             logger.error(f"Error adding customer: {e}")
             raise
     
+
+    def generate_invoice_number(self):
+        """Generate automatic invoice number"""
+        try:
+            # Get the last invoice number
+            result = self.execute_query(
+                "SELECT invoice_no FROM sales ORDER BY sale_id DESC LIMIT 1",
+                log_action=False
+            )
+            
+            if result:
+                last_invoice = result[0][0]
+                # Extract number and increment
+                if last_invoice.startswith('INV'):
+                    try:
+                        last_num = int(last_invoice[3:])
+                        new_num = last_num + 1
+                    except ValueError:
+                        new_num = 1
+                else:
+                    new_num = 1
+            else:
+                new_num = 1
+            
+            return f"INV{new_num:06d}"  # INV000001, INV000002, etc.
+            
+        except Exception as e:
+            logger.error(f"Error generating invoice number: {e}")
+            return f"INV{int(datetime.now().timestamp())}"  # Fallback
+        
     def add_sale(self, invoice_no: str, customer_id: int, sale_date, items: List[Dict], 
                  payments: List[Dict] = None, notes: str = "") -> int:
         """Add a new sale with items and optional payments"""
