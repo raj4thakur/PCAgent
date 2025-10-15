@@ -121,6 +121,7 @@ class DatabaseManager:
                 rrn TEXT,
                 reference TEXT,
                 status TEXT DEFAULT 'Completed',
+                notes TEXT,
                 created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (sale_id) REFERENCES sales (sale_id) ON DELETE CASCADE
             )
@@ -438,7 +439,7 @@ class DatabaseManager:
             return -1
     def add_distributor(self, name: str, village: str = "", taluka: str = "", district: str = "", 
                    mantri_name: str = "", mantri_mobile: str = "", sabhasad_count: int = 0, 
-                   contact_in_group: int = 0) -> int:
+                   contact_in_group: int = 0, status: str = "Active") -> int:
         """Add a new distributor with duplicate handling"""
         
         try:
@@ -456,10 +457,10 @@ class DatabaseManager:
             # Insert new distributor
             self.execute_query('''
             INSERT INTO distributors (name, village, taluka, district, mantri_name, mantri_mobile, 
-                                    sabhasad_count, contact_in_group)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                    sabhasad_count, contact_in_group, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (name, village, taluka, district, mantri_name, mantri_mobile, 
-                sabhasad_count, contact_in_group), log_action=False)
+                sabhasad_count, contact_in_group, status), log_action=False)
             
             # Get the inserted distributor_id
             distributor_id = self.execute_query('SELECT last_insert_rowid()', log_action=False)[0][0]
@@ -498,34 +499,76 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error checking distributor existence: {e}")
             return False
+    # In your DatabaseManager class in database.py, replace the generate_invoice_number method:
+
     def generate_invoice_number(self):
-        """Generate automatic invoice number"""
+        """Generate automatic invoice number in format: INVCLmmyyserial"""
         try:
-            # Get the last invoice number
+            # Get current date components
+            now = datetime.now()
+            month = now.strftime('%m')  # Two-digit month
+            year = now.strftime('%y')   # Two-digit year
+            
+            # Get the last invoice number for this month-year
             result = self.execute_query(
-                "SELECT invoice_no FROM sales ORDER BY sale_id DESC LIMIT 1",
+                "SELECT invoice_no FROM sales WHERE invoice_no LIKE ? ORDER BY sale_id DESC LIMIT 1",
+                (f"INVCL{month}{year}%",),
                 log_action=False
             )
             
             if result:
                 last_invoice = result[0][0]
-                # Extract number and increment
-                if last_invoice.startswith('INV'):
-                    try:
-                        last_num = int(last_invoice[3:])
-                        new_num = last_num + 1
-                    except ValueError:
-                        new_num = 1
-                else:
-                    new_num = 1
+                # Extract serial number and increment
+                try:
+                    # Format: INVCLmmyyXXX
+                    serial_part = last_invoice[8:]  # Get part after INVCLmmyy
+                    last_serial = int(serial_part)
+                    new_serial = last_serial + 1
+                except ValueError:
+                    new_serial = 1
             else:
-                new_num = 1
+                # First invoice of the month-year
+                new_serial = 1
             
-            return f"INV{new_num:06d}"  # INV000001, INV000002, etc.
+            # Format: INVCL + month(2) + year(2) + serial(3 digits)
+            return f"INVCL{month}{year}{new_serial:03d}"
             
         except Exception as e:
             logger.error(f"Error generating invoice number: {e}")
-            return f"INV{int(datetime.now().timestamp())}"  # Fallback
+            # Fallback: timestamp-based
+            return f"INVCL{int(datetime.now().timestamp())}"
+
+    # Or if you want a more flexible version with configurable prefix:
+    def generate_invoice_number(self, prefix="INVCL"):
+        """Generate automatic invoice number in format: PREFIXmmyyserial"""
+        try:
+            now = datetime.now()
+            month = now.strftime('%m')
+            year = now.strftime('%y')
+            
+            result = self.execute_query(
+                "SELECT invoice_no FROM sales WHERE invoice_no LIKE ? ORDER BY sale_id DESC LIMIT 1",
+                (f"{prefix}{month}{year}%",),
+                log_action=False
+            )
+            
+            if result:
+                last_invoice = result[0][0]
+                try:
+                    # Remove prefix and date part, get serial
+                    serial_part = last_invoice[len(prefix) + 4:]  # prefix + 4 digits (mmyy)
+                    last_serial = int(serial_part)
+                    new_serial = last_serial + 1
+                except ValueError:
+                    new_serial = 1
+            else:
+                new_serial = 1
+            
+            return f"{prefix}{month}{year}{new_serial:03d}"
+            
+        except Exception as e:
+            logger.error(f"Error generating invoice number: {e}")
+            return f"{prefix}{int(datetime.now().timestamp())}"
         
     # Add to your DatabaseManager class in database.py
 

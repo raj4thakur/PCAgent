@@ -438,7 +438,7 @@ class DataProcessor:
                     if self._is_header_row(row) or pd.isna(row.iloc[0]):
                         continue
                     
-                    print(f"🔧 Processing row {index}: {row.tolist()}")  # DEBUG
+                    print(f"🔧 Processing row {index}")
                     
                     # Extract sales data with flexible column mapping
                     invoice_no = self._extract_sales_value(row, 'invoice', 0, f"INV_{datetime.now().strftime('%Y%m%d%H%M%S')}_{index}")
@@ -447,33 +447,38 @@ class DataProcessor:
                     quantity = self._safe_float(self._extract_sales_value(row, 'quantity', 3, 0))
                     amount = self._safe_float(self._extract_sales_value(row, 'amount', 4, 0))
                     
-                    print(f"🔧 Extracted - Invoice: {invoice_no}, Customer: {customer_name}, Product: {product_name}, Qty: {quantity}, Amount: {amount}")  # DEBUG
+                    print(f"   Extracted - Invoice: '{invoice_no}', Customer: '{customer_name}', Product: '{product_name}', Qty: {quantity}, Amount: {amount}")
                     
-                    # Validate data
+                    # Validate essential data
                     if not customer_name or customer_name == "Unknown Customer":
-                        print(f"⚠️ Skipping row {index} - invalid customer name")
+                        print(f"   ⚠️ Skipping - invalid customer name")
                         continue
                     
                     if quantity <= 0:
-                        print(f"⚠️ Skipping row {index} - invalid quantity: {quantity}")
+                        print(f"   ⚠️ Skipping - invalid quantity: {quantity}")
+                        continue
+                    
+                    if amount <= 0:
+                        print(f"   ⚠️ Skipping - invalid amount: {amount}")
                         continue
                     
                     # Get or create customer
                     customer_id = self._get_or_create_customer(customer_name, "", "", "", "")
                     if not customer_id:
-                        print(f"⚠️ Skipping row {index} - could not get/create customer")
+                        print(f"   ⚠️ Skipping - could not get/create customer")
                         continue
                     
                     # Get product ID
                     product_id = self._get_product_id(product_name)
                     if not product_id:
-                        print(f"⚠️ Skipping row {index} - product not found: {product_name}")
+                        print(f"   ⚠️ Skipping - product not found: '{product_name}'")
+                        print(f"   Available products: {list(self.product_mapping.keys())}")
                         continue
                     
-                    # Calculate rate if not provided directly
+                    # Calculate rate
                     rate = amount / quantity if quantity > 0 else 0
                     
-                    # Create sale
+                    # Create sale items
                     sale_date = datetime.now().date()
                     sale_items = [{
                         'product_id': product_id,
@@ -481,22 +486,25 @@ class DataProcessor:
                         'rate': rate
                     }]
                     
-                    # Generate invoice number if not provided
+                    # Generate proper invoice number
                     if not invoice_no or invoice_no.startswith('INV_'):
                         invoice_no = self.db.generate_invoice_number()
                     
-                    print(f"🔧 Creating sale - Customer: {customer_id}, Product: {product_id}, Items: {sale_items}")  # DEBUG
+                    print(f"   Creating sale - Customer ID: {customer_id}, Product ID: {product_id}")
                     
+                    # Add sale to database
                     sale_id = self.db.add_sale(invoice_no, customer_id, sale_date, sale_items)
                     
-                    if sale_id:
+                    if sale_id and sale_id > 0:
                         processed_rows += 1
-                        print(f"✅ Successfully processed sale row {index}")
+                        print(f"   ✅ Successfully created sale ID: {sale_id}")
                     else:
-                        print(f"❌ Failed to process sale row {index}")
+                        print(f"   ❌ Failed to create sale")
                         
                 except Exception as e:
-                    print(f"❌ Error processing row {index}: {e}")
+                    print(f"   ❌ Error in row {index}: {e}")
+                    import traceback
+                    traceback.print_exc()
                     continue
             
             print(f"🎉 Processed {processed_rows} sales from {sheet_name}")
@@ -504,8 +512,9 @@ class DataProcessor:
             
         except Exception as e:
             print(f"💥 Error processing sales sheet: {e}")
+            import traceback
+            traceback.print_exc()
             return False
-
     def _extract_sales_value(self, row, field_name, default_index, default_value):
         """Extract sales values with flexible column matching"""
         # Try to find column by name
@@ -647,3 +656,55 @@ class DataProcessor:
             print("❓ Unknown sheet type - trying customer processing as fallback")
             return self.process_customer_sheet(df, file_name, sheet_name)
         
+    def process_excel_file(self, file_path):
+        """Enhanced file processing with all data types"""
+        try:
+            file_name = os.path.basename(file_path)
+            print(f"🚀 Processing file: {file_name}")
+            
+            excel_file = pd.ExcelFile(file_path)
+            processed_sheets = 0
+            
+            for sheet_name in excel_file.sheet_names:
+                df = pd.read_excel(file_path, sheet_name=sheet_name)
+                df_clean = self._clean_dataframe(df)
+                
+                print(f"\n📊 Sheet: {sheet_name}")
+                print(f"   Columns: {df_clean.columns.tolist()}")
+                
+                # Check all types with priority
+                is_payment = self._is_payment_sheet(df_clean)
+                is_sales = self._is_sales_sheet(df_clean)
+                is_customer = self._is_customer_sheet(df_clean)
+                is_distributor = self._is_distributor_sheet(df_clean)
+                
+                print(f"   Detection - Payment: {is_payment}, Sales: {is_sales}, Customer: {is_customer}, Distributor: {is_distributor}")
+                
+                processed = False
+                if is_payment:
+                    print("   💳 Processing as PAYMENT sheet")
+                    processed = self.process_payment_sheet(df_clean, file_name, sheet_name)
+                elif is_sales:
+                    print("   💰 Processing as SALES sheet")
+                    processed = self.process_sales_sheet(df_clean, file_name, sheet_name)
+                elif is_distributor:
+                    print("   🤝 Processing as DISTRIBUTOR sheet")
+                    processed = self.process_distributor_sheet(df_clean, file_name, sheet_name)
+                elif is_customer:
+                    print("   👥 Processing as CUSTOMER sheet")
+                    processed = self.process_customer_sheet(df_clean, file_name, sheet_name)
+                else:
+                    print("   ❓ Unknown sheet type")
+                
+                if processed:
+                    processed_sheets += 1
+                    print(f"   ✅ Successfully processed")
+                else:
+                    print(f"   ❌ Failed to process")
+            
+            print(f"\n🎉 File processing complete: {processed_sheets}/{len(excel_file.sheet_names)} sheets processed")
+            return processed_sheets > 0
+            
+        except Exception as e:
+            print(f"💥 Error processing file {file_path}: {e}")
+            return False
